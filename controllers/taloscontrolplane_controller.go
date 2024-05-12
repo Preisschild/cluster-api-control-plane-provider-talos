@@ -331,6 +331,25 @@ func (r *TalosControlPlaneReconciler) getFailureDomain(_ context.Context, cluste
 }
 
 func (r *TalosControlPlaneReconciler) bootControlPlane(ctx context.Context, cluster *clusterv1.Cluster, tcp *controlplanev1.TalosControlPlane, first bool) (ctrl.Result, error) {
+
+	machine := &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      names.SimpleNameGenerator.GenerateName(tcp.Name + "-"),
+			Namespace: tcp.Namespace,
+			Labels: map[string]string{
+				clusterv1.ClusterNameLabel:         cluster.Name,
+				clusterv1.MachineControlPlaneLabel: "",
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(tcp, controlplanev1.GroupVersion.WithKind("TalosControlPlane")),
+			},
+		},
+		Spec: clusterv1.MachineSpec{
+			ClusterName: cluster.Name,
+			Version:     &tcp.Spec.Version,
+		},
+	}
+
 	// Since the cloned resource should eventually have a controller ref for the Machine, we create an
 	// OwnerReference here without the Controller field set
 	infraCloneOwner := &metav1.OwnerReference{
@@ -345,6 +364,7 @@ func (r *TalosControlPlaneReconciler) bootControlPlane(ctx context.Context, clus
 		Client:      r.Client,
 		TemplateRef: &tcp.Spec.InfrastructureTemplate,
 		Namespace:   tcp.Namespace,
+		Name:        machine.Name,
 		OwnerRef:    infraCloneOwner,
 		ClusterName: cluster.Name,
 	})
@@ -354,6 +374,8 @@ func (r *TalosControlPlaneReconciler) bootControlPlane(ctx context.Context, clus
 
 		return ctrl.Result{}, err
 	}
+
+	machine.Spec.InfrastructureRef = *infraRef
 
 	bootstrapConfig := &tcp.Spec.ControlPlaneConfig.ControlPlaneConfig
 	if !reflect.ValueOf(tcp.Spec.ControlPlaneConfig.InitConfig).IsZero() && first {
@@ -369,27 +391,7 @@ func (r *TalosControlPlaneReconciler) bootControlPlane(ctx context.Context, clus
 		return ctrl.Result{}, err
 	}
 
-	machine := &clusterv1.Machine{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.SimpleNameGenerator.GenerateName(tcp.Name + "-"),
-			Namespace: tcp.Namespace,
-			Labels: map[string]string{
-				clusterv1.ClusterNameLabel:         cluster.Name,
-				clusterv1.MachineControlPlaneLabel: "",
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(tcp, controlplanev1.GroupVersion.WithKind("TalosControlPlane")),
-			},
-		},
-		Spec: clusterv1.MachineSpec{
-			ClusterName:       cluster.Name,
-			Version:           &tcp.Spec.Version,
-			InfrastructureRef: *infraRef,
-			Bootstrap: clusterv1.Bootstrap{
-				ConfigRef: bootstrapRef,
-			},
-		},
-	}
+	machine.Spec.Bootstrap.ConfigRef = bootstrapRef
 
 	failureDomains := r.getFailureDomain(ctx, cluster)
 	if len(failureDomains) > 0 {
